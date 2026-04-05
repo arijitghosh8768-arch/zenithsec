@@ -1,216 +1,98 @@
-import uuid
-import hashlib
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
-from config.database import get_db
-from config.security import get_current_user
-from models.user import User
-from models.repository import Repository, File, Commit
+# File: backend/api/code_vault/routes.py
+
+from fastapi import APIRouter, Depends, HTTPException
+from typing import List, Optional, Dict
 from pydantic import BaseModel, Field
-from typing import Optional, List
 from datetime import datetime
+from config.security import get_current_user_required
+from config.firebase_admin_config import db
 
-router = APIRouter(prefix="/api/code", tags=["Code Vault"])
+router = APIRouter(prefix="/api/codevault", tags=["Code Vault"])
 
-
-class RepoCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
-    description: Optional[str] = ""
-    visibility: str = "private"
-    language: Optional[str] = ""
-
-
-class RepoResponse(BaseModel):
-    id: int
-    repo_id: str
+class RepoBase(BaseModel):
     name: str
-    description: str
-    visibility: str
+    description: Optional[str] = None
     language: str
-    stars: int
+    is_public: bool = False
+
+class RepoCreate(RepoBase):
+    pass
+
+class RepoResponse(RepoBase):
+    id: str
     created_at: datetime
     updated_at: datetime
-    class Config:
-        from_attributes = True
-
-
-class FileCreate(BaseModel):
-    path: str
-    content: str = ""
-
+    owner_uid: str
 
 class FileResponse(BaseModel):
-    id: int
-    path: str
+    id: str
+    filename: str
     content: str
-    file_hash: str
-    size: int
+    language: str
     created_at: datetime
-    class Config:
-        from_attributes = True
-
-
-class CommitResponse(BaseModel):
-    id: int
-    message: str
-    commit_hash: str
-    author: str
-    files_changed: int
-    created_at: datetime
-    class Config:
-        from_attributes = True
-
-
-class CodeScanResult(BaseModel):
-    vulnerabilities: List[dict] = []
-    secrets: List[dict] = []
-    quality_issues: List[dict] = []
-    score: float = 100.0
-
 
 @router.get("/repos", response_model=List[RepoResponse])
-async def list_repos(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Repository).where(Repository.user_id == current_user.id).order_by(desc(Repository.updated_at))
-    )
-    return result.scalars().all()
+async def list_repos(current_user: dict = Depends(get_current_user_required)):
+    """List all code repositories for the user from Firestore"""
+    user_uid = current_user['uid']
+    repos_docs = db.collection('users').document(user_uid).collection('code_repos').stream()
+    
+    results = []
+    for doc in repos_docs:
+        data = doc.to_dict()
+        data['id'] = doc.id
+        results.append(RepoResponse(**data))
+        
+    return results
 
-
-@router.post("/repos", response_model=RepoResponse, status_code=status.HTTP_201_CREATED)
-async def create_repo(data: RepoCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    repo = Repository(
-        repo_id=str(uuid.uuid4())[:8],
-        user_id=current_user.id,
-        name=data.name,
-        description=data.description or "",
-        visibility=data.visibility,
-        language=data.language or "",
-    )
-    db.add(repo)
-    await db.commit()
-    await db.refresh(repo)
-    return repo
-
-
-@router.get("/repos/{repo_id}", response_model=RepoResponse)
-async def get_repo(repo_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Repository).where(Repository.repo_id == repo_id, Repository.user_id == current_user.id)
-    )
-    repo = result.scalar_one_or_none()
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    return repo
-
-
-@router.delete("/repos/{repo_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_repo(repo_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Repository).where(Repository.repo_id == repo_id, Repository.user_id == current_user.id)
-    )
-    repo = result.scalar_one_or_none()
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    await db.delete(repo)
-    await db.commit()
-
+@router.post("/repos", response_model=RepoResponse)
+async def create_repo(data: RepoCreate, current_user: dict = Depends(get_current_user_required)):
+    """Create a new repository in Firestore for the user's code vault"""
+    user_uid = current_user['uid']
+    repo_ref = db.collection('users').document(user_uid).collection('code_repos').document()
+    
+    repo_data = data.model_dump()
+    repo_data['owner_uid'] = user_uid
+    repo_data['created_at'] = datetime.utcnow()
+    repo_data['updated_at'] = datetime.utcnow()
+    
+    repo_ref.set(repo_data)
+    
+    repo_data['id'] = repo_ref.id
+    return RepoResponse(**repo_data)
 
 @router.get("/repos/{repo_id}/files", response_model=List[FileResponse])
-async def list_files(repo_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Repository).where(Repository.repo_id == repo_id, Repository.user_id == current_user.id)
-    )
-    repo = result.scalar_one_or_none()
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    result = await db.execute(select(File).where(File.repository_id == repo.id))
-    return result.scalars().all()
+async def list_files(repo_id: str, current_user: dict = Depends(get_current_user_required)):
+    """Retrieve all files associated with a specific code vault repository from Firestore"""
+    user_uid = current_user['uid']
+    files_docs = db.collection('users').document(user_uid).collection('code_repos').document(repo_id).collection('files').stream()
+    
+    results = []
+    for doc in files_docs:
+        data = doc.to_dict()
+        data['id'] = doc.id
+        results.append(FileResponse(**data))
+        
+    return results
 
-
-@router.post("/repos/{repo_id}/files", response_model=FileResponse, status_code=status.HTTP_201_CREATED)
-async def create_file(
-    repo_id: str, data: FileCreate,
-    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(
-        select(Repository).where(Repository.repo_id == repo_id, Repository.user_id == current_user.id)
-    )
-    repo = result.scalar_one_or_none()
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-
-    file = File(
-        repository_id=repo.id,
-        path=data.path,
-        content=data.content,
-        file_hash=hashlib.sha256(data.content.encode()).hexdigest(),
-        size=len(data.content.encode()),
-    )
-    db.add(file)
-
-    # Auto-commit
-    commit = Commit(
-        repository_id=repo.id,
-        message=f"Add {data.path}",
-        commit_hash=hashlib.sha256(f"{data.path}{data.content}".encode()).hexdigest()[:12],
-        author=current_user.username,
-        files_changed=1,
-    )
-    db.add(commit)
-    await db.commit()
-    await db.refresh(file)
-    return file
-
-
-@router.post("/repos/{repo_id}/scan", response_model=CodeScanResult)
-async def scan_repo(repo_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Repository).where(Repository.repo_id == repo_id, Repository.user_id == current_user.id)
-    )
-    repo = result.scalar_one_or_none()
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-
-    result = await db.execute(select(File).where(File.repository_id == repo.id))
-    files = result.scalars().all()
-
-    vulns = []
-    secrets = []
-    quality = []
-    score = 100.0
-
-    for f in files:
-        content = f.content.lower()
-        # Vulnerability checks
-        if "eval(" in content:
-            vulns.append({"file": f.path, "line": 0, "type": "code_injection", "detail": "Use of eval() - potential code injection", "severity": "high"})
-            score -= 10
-        if "exec(" in content:
-            vulns.append({"file": f.path, "line": 0, "type": "code_injection", "detail": "Use of exec() - potential code injection", "severity": "high"})
-            score -= 10
-        if "password" in content and "=" in content:
-            secrets.append({"file": f.path, "type": "hardcoded_password", "detail": "Possible hardcoded password detected"})
-            score -= 15
-        if "api_key" in content or "apikey" in content:
-            secrets.append({"file": f.path, "type": "api_key", "detail": "Possible API key in source code"})
-            score -= 15
-        if "todo" in content or "fixme" in content:
-            quality.append({"file": f.path, "type": "todo", "detail": "TODO/FIXME found"})
-            score -= 2
-
-    return CodeScanResult(vulnerabilities=vulns, secrets=secrets, quality_issues=quality, score=max(score, 0))
-
-
-@router.get("/repos/{repo_id}/commits", response_model=List[CommitResponse])
-async def list_commits(repo_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Repository).where(Repository.repo_id == repo_id, Repository.user_id == current_user.id)
-    )
-    repo = result.scalar_one_or_none()
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    result = await db.execute(
-        select(Commit).where(Commit.repository_id == repo.id).order_by(desc(Commit.created_at))
-    )
-    return result.scalars().all()
+@router.post("/repos/{repo_id}/files")
+async def add_file(repo_id: str, filename: str, content: str, language: str, current_user: dict = Depends(get_current_user_required)):
+    """Add a new file to a specific code vault repository in Firestore"""
+    user_uid = current_user['uid']
+    file_ref = db.collection('users').document(user_uid).collection('code_repos').document(repo_id).collection('files').document()
+    
+    file_data = {
+        "filename": filename,
+        "content": content,
+        "language": language,
+        "created_at": datetime.utcnow()
+    }
+    
+    file_ref.set(file_data)
+    
+    # Update repository modified date
+    db.collection('users').document(user_uid).collection('code_repos').document(repo_id).update({
+        "updated_at": datetime.utcnow()
+    })
+    
+    return {"status": "ok", "file_id": file_ref.id}

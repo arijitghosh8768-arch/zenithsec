@@ -1,148 +1,80 @@
-import json
+# File: backend/api/portfolio/routes.py
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from config.database import get_db
-from config.security import get_current_user
-from models.user import User
-from models.learning import Portfolio, Project
-from pydantic import BaseModel
-from typing import Optional, List
+from typing import List, Optional, Dict
+from pydantic import BaseModel, Field
 from datetime import datetime
+from config.security import get_current_user_required
+from config.firebase_admin_config import db
 
 router = APIRouter(prefix="/api/portfolio", tags=["Portfolio"])
 
-
-class PortfolioUpdate(BaseModel):
-    headline: Optional[str] = None
-    about: Optional[str] = None
-    skills: Optional[List[str]] = None
-    social_links: Optional[dict] = None
-    is_public: Optional[bool] = None
-
-
-class ProjectCreate(BaseModel):
-    title: str
-    description: Optional[str] = ""
-    technologies: List[str] = []
-    demo_url: Optional[str] = ""
-    github_url: Optional[str] = ""
-    image_url: Optional[str] = ""
-    security_score: float = 0.0
-
-
-class PortfolioResponse(BaseModel):
-    id: int
-    headline: str
-    about: str
-    skills: list
-    social_links: dict
-    is_public: bool
-    projects: list = []
-
-    class Config:
-        from_attributes = True
-
-
-class ProjectResponse(BaseModel):
-    id: int
+class ProjectBase(BaseModel):
     title: str
     description: str
-    technologies: list
-    demo_url: str
-    github_url: str
-    image_url: str
-    security_score: float
+    github_url: Optional[str] = None
+    demo_url: Optional[str] = None
+    technologies: List[str] = []
+
+class ProjectCreate(ProjectBase):
+    pass
+
+class ProjectResponse(ProjectBase):
+    id: str
     created_at: datetime
-    class Config:
-        from_attributes = True
 
+class PortfolioResponse(BaseModel):
+    user_uid: str
+    username: str
+    bio: Optional[str] = None
+    skills: List[str] = []
+    projects: List[ProjectResponse] = []
+    certificates_count: int = 0
 
-async def _get_or_create_portfolio(user_id: int, db: AsyncSession) -> Portfolio:
-    result = await db.execute(select(Portfolio).where(Portfolio.user_id == user_id))
-    portfolio = result.scalar_one_or_none()
-    if not portfolio:
-        portfolio = Portfolio(user_id=user_id)
-        db.add(portfolio)
-        await db.commit()
-        await db.refresh(portfolio)
-    return portfolio
-
-
-@router.get("/me")
-async def get_my_portfolio(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    portfolio = await _get_or_create_portfolio(current_user.id, db)
-    result = await db.execute(select(Project).where(Project.portfolio_id == portfolio.id))
-    projects = result.scalars().all()
-    return {
-        "id": portfolio.id,
-        "headline": portfolio.headline,
-        "about": portfolio.about,
-        "skills": json.loads(portfolio.skills) if portfolio.skills else [],
-        "social_links": json.loads(portfolio.social_links) if portfolio.social_links else {},
-        "is_public": portfolio.is_public,
-        "username": current_user.username,
-        "full_name": current_user.full_name,
-        "projects": [ProjectResponse.model_validate(p) for p in projects],
-    }
-
-
-@router.put("/me")
-async def update_portfolio(
-    data: PortfolioUpdate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    portfolio = await _get_or_create_portfolio(current_user.id, db)
-    if data.headline is not None:
-        portfolio.headline = data.headline
-    if data.about is not None:
-        portfolio.about = data.about
-    if data.skills is not None:
-        portfolio.skills = json.dumps(data.skills)
-    if data.social_links is not None:
-        portfolio.social_links = json.dumps(data.social_links)
-    if data.is_public is not None:
-        portfolio.is_public = data.is_public
-    await db.commit()
-    return {"status": "updated"}
-
-
-@router.post("/projects", response_model=ProjectResponse, status_code=201)
-async def add_project(
-    data: ProjectCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    portfolio = await _get_or_create_portfolio(current_user.id, db)
-    project = Project(
-        portfolio_id=portfolio.id,
-        title=data.title,
-        description=data.description or "",
-        technologies=json.dumps(data.technologies),
-        demo_url=data.demo_url or "",
-        github_url=data.github_url or "",
-        image_url=data.image_url or "",
-        security_score=data.security_score,
+@router.get("/me", response_model=PortfolioResponse)
+async def get_my_portfolio(current_user: dict = Depends(get_current_user_required)):
+    """Retrieve the current user's portfolio and associated projects from Firestore"""
+    user_uid = current_user['uid']
+    user_doc = db.collection('users').document(user_uid).get()
+    
+    if not user_doc.exists:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    
+    user_data = user_doc.to_dict()
+    
+    # Get projects from sub-collection
+    projects_docs = db.collection('users').document(user_uid).collection('projects').stream()
+    projects = []
+    for doc in projects_docs:
+        p_data = doc.to_dict()
+        p_data['id'] = doc.id
+        projects.append(ProjectResponse(**p_data))
+        
+    return PortfolioResponse(
+        user_uid=user_uid,
+        username=user_data.get('username', 'Anonymous'),
+        bio=user_data.get('bio', 'Security Researcher'),
+        skills=user_data.get('skills', ['Cybersecurity']),
+        projects=projects,
+        certificates_count=user_data.get('certificates_count', 0)
     )
-    db.add(project)
-    await db.commit()
-    await db.refresh(project)
-    return project
 
+@router.post("/projects", response_model=ProjectResponse)
+async def add_project(data: ProjectCreate, current_user: dict = Depends(get_current_user_required)):
+    """Add a new project to the user's Firestore portfolio"""
+    user_uid = current_user['uid']
+    project_ref = db.collection('users').document(user_uid).collection('projects').document()
+    
+    project_data = data.model_dump()
+    project_data['created_at'] = datetime.utcnow()
+    project_ref.set(project_data)
+    
+    project_data['id'] = project_ref.id
+    return ProjectResponse(**project_data)
 
-@router.delete("/projects/{project_id}", status_code=204)
-async def delete_project(
-    project_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    portfolio = await _get_or_create_portfolio(current_user.id, db)
-    result = await db.execute(
-        select(Project).where(Project.id == project_id, Project.portfolio_id == portfolio.id)
-    )
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    await db.delete(project)
-    await db.commit()
+@router.delete("/projects/{project_id}")
+async def delete_project(project_id: str, current_user: dict = Depends(get_current_user_required)):
+    """Delete a specific project from the user's Firestore portfolio"""
+    user_uid = current_user['uid']
+    db.collection('users').document(user_uid).collection('projects').document(project_id).delete()
+    return {"status": "deleted"}
