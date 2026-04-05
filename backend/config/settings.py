@@ -8,10 +8,10 @@ if not os.getenv("RENDER"):
     load_dotenv()
 
 class Settings:
-    # Use SQLite for development (no PostgreSQL needed)
-    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./zenithsec.db")
-    
+    # Security
     SECRET_KEY = os.getenv("SECRET_KEY", "your-super-secret-key-change-this-in-production")
+    
+    # AI APIs
     GROQ_API_KEYS = [
         os.getenv("GROQ_API_KEY_PRIMARY", ""),
         os.getenv("GROQ_API_KEY_BACKUP", ""),
