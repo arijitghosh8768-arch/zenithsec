@@ -1,9 +1,7 @@
-// File: frontend/src/services/api.js
-
 import axios from 'axios';
-import { authService } from './auth';
 
-const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:8000');
+// Use environment variable for API URL
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -12,46 +10,27 @@ const api = axios.create({
   },
 });
 
-// Request interceptor - Add token to every request
+// Request interceptor
 api.interceptors.request.use(
-  async (config) => {
-    const token = authService.getToken();
+  (config) => {
+    const token = localStorage.getItem('access_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
-  (error) => {
-    return Promise.reject(error);
-  }
+  (error) => Promise.reject(error)
 );
 
-// Response interceptor - Handle 401 errors
+// Response interceptor
 api.interceptors.response.use(
   (response) => response,
-  async (error) => {
-    const originalRequest = error.config;
-    
-    if (error.response?.status === 401 && !originalRequest._retry) {
-      originalRequest._retry = true;
-      
-      try {
-        // Try to refresh token
-        const refreshed = await authService.refreshToken();
-        if (refreshed) {
-          // Retry original request
-          const token = authService.getToken();
-          originalRequest.headers.Authorization = `Bearer ${token}`;
-          return api(originalRequest);
-        }
-      } catch (refreshError) {
-        console.error('Token refresh failed:', refreshError);
-      }
-      
-      // If refresh fails, logout
-      authService.logout();
+  (error) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('user');
+      window.location.href = '/login';
     }
-    
     return Promise.reject(error);
   }
 );
