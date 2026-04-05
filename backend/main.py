@@ -3,6 +3,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+import os
+
+# Ensure PORT environment variable is used
+PORT = int(os.getenv("PORT", 8000))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,6 +25,11 @@ app.add_middleware(
 @app.get("/")
 async def root():
     return {"message": "ZenithSec API is running", "status": "healthy"}
+
+@app.get("/health")
+async def render_health():
+    """Reserved health check for Render/Vercel"""
+    return {"status": "ok"}
 
 @app.get("/api/health", tags=["Health"])
 async def health():
@@ -44,3 +53,8 @@ except Exception as e:
     logger.error(f"✗ Chatbot router failed: {e}")
 
 logger.info("✅ Server ready!")
+
+if __name__ == "__main__":
+    import uvicorn
+    # Use string reference for reload capability and ensure correct port for Render
+    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=False)

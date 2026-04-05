@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: zenithsec-backend
+    runtime: python
+    repo: https://github.com/arijitghosh8768-arch/zenithsec
+    plan: free
+    branch: main
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.8
+      - key: PIP_NO_CACHE_DIR
+        value: 1
+      - key: PIP_DISABLE_PIP_VERSION_CHECK
+        value: 1
+      - key: CARGO_HOME
+        value: /tmp/cargo
+      - key: RUSTUP_HOME
+        value: /tmp/rustup
+      - key: PYDANTIC_CORE_NO_MATURIN
+        value: 1
+      - key: DATABASE_URL
+        sync: false  # Set this in Render dashboard
+      - key: SECRET_KEY
+        sync: false  # Set this in Render dashboard
+      - key: GROQ_API_KEY
+        sync: false  # Set this in Render dashboard
+      - key: OPENAI_API_KEY
+        sync: false  # Optional
+      - key: REDIS_URL
+        sync: false  # Optional
+    
+    buildCommand: |
+      echo "🚀 Starting build..."
+      echo "Python version: $(python --version)"
+      pip install --upgrade pip setuptools wheel
+      pip install --no-cache-dir -r requirements.txt
+      echo "✅ Build complete!"
+    
+    startCommand: |
+      uvicorn main:app --host 0.0.0.0 --port $PORT
+    
+    healthCheckPath: /health

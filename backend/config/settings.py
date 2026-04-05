@@ -3,7 +3,9 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env file only in development
+if not os.getenv("RENDER"):
+    load_dotenv()
 
 class Settings:
     # Use SQLite for development (no PostgreSQL needed)
@@ -31,5 +33,8 @@ class Settings:
     ACCESS_TOKEN_EXPIRE_MINUTES = 30
     # Firebase Settings
     FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID", "zenithsec-52df5")
+
+    # Environment
+    IS_PRODUCTION = bool(os.getenv("RENDER", False))
 
 settings = Settings()
