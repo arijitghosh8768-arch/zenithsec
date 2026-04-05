@@ -1,0 +1,35 @@
+# File: backend/config/settings.py
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class Settings:
+    # Use SQLite for development (no PostgreSQL needed)
+    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./zenithsec.db")
+    
+    SECRET_KEY = os.getenv("SECRET_KEY", "your-super-secret-key-change-this-in-production")
+    GROQ_API_KEYS = [
+        os.getenv("GROQ_API_KEY_PRIMARY", ""),
+        os.getenv("GROQ_API_KEY_BACKUP", ""),
+        os.getenv("GROQ_API_KEY_3", "")
+    ]
+    GROQ_API_KEY = GROQ_API_KEYS[0] # For backward compatibility
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
+    NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
+    VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY", "")
+    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+    
+    PROJECT_NAME = "ZenithSec"
+    VERSION = "1.0.0"
+    ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:3000"]
+    
+    # JWT Settings
+    ALGORITHM = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES = 30
+    # Firebase Settings
+    FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID", "zenithsec-52df5")
+
+settings = Settings()
