@@ -1,0 +1,17 @@
+# Ignore parent backend directories and configuration files
+../backend/
+../requirements.txt
+../main.py
+../api/
+../init_db.py
+../runtime.txt
+../test_deployment.py
+../test_api_v2.py
+../test_results.txt
+../render.yaml
+
+# Ignore standard Python cache and bytecode
+*.py
+*.pyc
+__pycache__/
+.venv/
